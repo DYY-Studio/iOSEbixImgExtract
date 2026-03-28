@@ -386,9 +386,36 @@
 
 - (void)presentFolderPickerWithTempDir:(NSString *)tempDir {
     self.currentTempDir = tempDir; // 记录下来供回调使用
+
+	NSError *error = nil;
+	NSArray<NSURLResourceKey> *keys = @[NSURLIsDirectoryKey];
+    NSArray<NSURL *> *contents = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:[NSURL fileURLWithPath:tempDir]
+                                            includingPropertiesForKeys:keys
+                                                               options:NSDirectoryEnumerationSkipsHiddenFiles
+                                                                 error:&error];
+    
+    if (error) {
+        NSLog(@"[EbookJapanDumper] %@", error.localizedDescription);
+        return;
+    }
+
+    NSMutableArray<NSURL *> *filesToExport = [NSMutableArray array];
+    for (NSURL *url in contents) {
+        NSNumber *isDirectory = nil;
+        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+        
+        if (isDirectory && ![isDirectory boolValue]) {
+            [filesToExport addObject:url];
+        }
+    }
+
+    if (filesToExport.count == 0) {
+        NSLog(@"[EbookJapanDumper] No files found in temp directory to export.");
+        return;
+    }
     
     // 开启文件夹选择模式
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[[NSURL fileURLWithPath:tempDir]] asCopy:NO];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:filesToExport asCopy:NO];
 	
     picker.delegate = self;
 	picker.allowsMultipleSelection = NO;
@@ -400,39 +427,8 @@
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *targetFolderURL = urls.firstObject;
 	NSLog(@"[EbookJapanDumper] User selected folder: %@", targetFolderURL.path);
-    
-    // 1. 开启安全访问权限
-    if ([targetFolderURL startAccessingSecurityScopedResource]) {
-        NSFileManager *fm = [NSFileManager defaultManager];
-        NSArray *dumpedFiles = [fm contentsOfDirectoryAtPath:self.currentTempDir error:nil];
-        NSLog(@"[EbookJapanDumper] Found %lu dumped files in: %@", (unsigned long)dumpedFiles.count, self.currentTempDir);
-        
-        for (NSString *fileName in dumpedFiles) {
-            NSString *srcPath = [self.currentTempDir stringByAppendingPathComponent:fileName];
-            NSURL *destURL = [targetFolderURL URLByAppendingPathComponent:fileName];
-            
-            // 2. 执行拷贝
-            NSError *error;
-            if ([fm fileExistsAtPath:destURL.path]) {
-                [fm removeItemAtURL:destURL error:nil]; // 如果已存在则覆盖
-            }
-            [fm copyItemAtPath:srcPath toPath:destURL.path error:&error];
-			if (error) {
-				NSLog(@"[EbookJapanDumper] Failed to copy %@ to %@. Error: %@", srcPath, destURL.path, error);
-			} else {
-				NSLog(@"[EbookJapanDumper] Successfully copied %@ to %@", srcPath, destURL.path);
-			}
-        }
-        
-        // 3. 停止访问
-        [targetFolderURL stopAccessingSecurityScopedResource];
-        
-        // 4. 清理临时目录
-        [fm removeItemAtPath:self.currentTempDir error:nil];
-        
-        // 提示成功
-        NSLog(@"[EbookJapanDumper] Dump 成功，共导出 %ld 本书籍", (unsigned long)dumpedFiles.count);
-    }
+
+	[[NSFileManager defaultManager] removeItemAtPath:self.currentTempDir error:nil];
 }
 @end
 

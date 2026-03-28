@@ -28,6 +28,21 @@
 @property (nonatomic, strong) NSNumber *volumeIndex;
 @end
 
+
+@interface ExportManager : 	NSObject <UIDocumentPickerDelegate>
+@property (nonatomic, strong) NSString *currentTempDir;
+@property (nonatomic, strong) UIWindow *floatingWindow;
+@property (nonatomic, assign) BOOL canceled;
++ (instancetype)shared;
++ (id)getRootViewController;
++ (id)getKeyWindow;
+- (void)showExtractionAlert;
+- (void)startAutomatedDump;
+- (NSString *)loadKeychainValueForKey:(NSString *)key service:(NSString *)service;
+- (void)presentFolderPickerWithTempDir:(NSString *)tempDir;
+@end
+
+
 @interface EBIWrapperEnvID : NSObject
 - (NSMutableArray *)createNewBuildIdentifier:(NSString *)uuid uuidGenDate:(NSString *)uuidGenDate;
 @end
@@ -44,14 +59,90 @@
 - (void)setImageDataAsJpeg:(bool)asJpeg;
 @end
 
-@interface ExportManager : 	NSObject <UIDocumentPickerDelegate>
-@property (nonatomic, strong) NSString *currentTempDir;
-@property (nonatomic, strong) UIWindow *floatingWindow;
-+ (instancetype)shared;
-- (void)startAutomatedDump;
-- (NSString *)loadKeychainValueForKey:(NSString *)key service:(NSString *)service;
-- (void)presentFolderPickerWithTempDir:(NSString *)tempDir;
+
+
+
+@interface ExtractionUIHandler : NSObject
+@property (nonatomic, strong) UIView *overlayView;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UIProgressView *progressView;
+@property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIProgressView *subProgressView;
+@property (nonatomic, strong) UILabel *subStatusLabel;
+
++ (instancetype)sharedHandler;
+- (void)showOverlayAndStartTask;
 @end
+
+@implementation ExtractionUIHandler
+
++ (instancetype)sharedHandler {
+    static ExtractionUIHandler *instance;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ instance = [[self alloc] init]; });
+    return instance;
+}
+
+- (void)showOverlayAndStartTask {
+    UIWindow *window = [ExportManager getKeyWindow];
+    
+    // 1. 创建全屏遮罩 (毛玻璃效果)
+    UIVisualEffectView *blurEffectView = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleDark]];
+    blurEffectView.frame = window.bounds;
+    blurEffectView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.overlayView = blurEffectView;
+
+	UIView *container = blurEffectView.contentView;
+
+	UIStackView *stackView = [[UIStackView alloc] init];
+	stackView.axis = UILayoutConstraintAxisVertical;
+	stackView.spacing = 10;
+	stackView.alignment = UIStackViewAlignmentFill;
+	stackView.frame = CGRectMake(50, window.center.y - 75, window.bounds.size.width - 100, 150);
+
+	[container addSubview:stackView];
+	stackView.center = container.center;
+
+	// 添加状态标签
+	self.statusLabel = [[UILabel alloc] init];
+    self.statusLabel.text = @"";
+    self.statusLabel.textColor = [UIColor whiteColor];
+    self.statusLabel.textAlignment = NSTextAlignmentCenter;
+	self.statusLabel.numberOfLines = 3;
+	self.statusLabel.font = [UIFont systemFontOfSize:12];
+    [stackView addArrangedSubview:self.statusLabel];
+
+	// 添加标题标签
+	self.titleLabel = [[UILabel alloc] init];
+	self.titleLabel.text = @"准备抽取...";
+	self.titleLabel.textColor = [UIColor whiteColor];
+	self.titleLabel.textAlignment = NSTextAlignmentCenter;
+	[stackView addArrangedSubview:self.titleLabel];
+    
+    // 添加总进度条
+    self.progressView = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    self.progressView.frame = CGRectMake(50, window.center.y, window.bounds.size.width - 100, 20);
+    self.progressView.progress = 0;
+    [stackView addArrangedSubview:self.progressView];
+    
+	// 添加副进度标签
+	self.subStatusLabel = [[UILabel alloc] init];
+	self.subStatusLabel.text = @"正在处理书籍...";
+	self.subStatusLabel.textColor = [UIColor whiteColor];
+	self.subStatusLabel.textAlignment = NSTextAlignmentCenter;
+	[stackView addArrangedSubview:self.subStatusLabel];
+
+	// 添加副进度条
+	self.subProgressView = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+	self.subProgressView.frame = CGRectMake(50, window.center.y + 30, window.bounds.size.width - 100, 20);
+	self.subProgressView.progress = 0;
+	[stackView addArrangedSubview:self.subProgressView];
+    
+    [window addSubview:self.overlayView];
+}
+@end
+
+
 
 @implementation ExportManager
 + (instancetype)shared {
@@ -59,8 +150,45 @@
 	static dispatch_once_t onceToken;
 	dispatch_once(&onceToken, ^{
 		instance = [[ExportManager alloc] init];
+		instance.canceled = NO;
 	});
 	return instance;
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++ (id)getRootViewController {
+    return [UIApplication sharedApplication].keyWindow.rootViewController;
+}
+
++ (id)getKeyWindow {
+	return [UIApplication sharedApplication].keyWindow;
+}
+#pragma clang diagnostic pop
+
+- (void)showExtractionAlert {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"EbixDumper" 
+                                                                   message:@"检测到Ebix文件，是否开始抽取？" 
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+        // 阻止抽取流程
+		self.canceled = YES;
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"开始" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        [[ExtractionUIHandler sharedHandler] showOverlayAndStartTask];
+    }]];
+    
+    [[ExportManager getRootViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showSuccessAlertWithCount:(NSInteger)count {
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"抽取完成" 
+																   message:[NSString stringWithFormat:@"成功抽取 %ld 本书籍！", (long)count] 
+															preferredStyle:UIAlertControllerStyleAlert];
+	[alert addAction:[UIAlertAction actionWithTitle:@"好的" style:UIAlertActionStyleDefault handler:nil]];
+
+	[[ExportManager getRootViewController] presentViewController:alert animated:YES completion:nil];
 }
 
 - (NSString *)loadKeychainValueForKey:(NSString *)key service:(NSString *)service {
@@ -110,9 +238,39 @@
                                                         errorHandler:nil];
     
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		NSMutableArray<NSURL *> *ebixFiles = [NSMutableArray array];
 		for (NSURL *fileURL in enumerator) {
 			NSString *filename = [fileURL lastPathComponent];
 			if (![filename.pathExtension.lowercaseString isEqualToString:@"ebix"]) continue;
+			[ebixFiles addObject:fileURL];
+		}
+
+		if (ebixFiles.count > 0) {
+			// 询问用户是否开始抽取
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[self showExtractionAlert];
+			});
+			// 等待用户响应后继续执行抽取流程
+			while ([ExtractionUIHandler sharedHandler].overlayView == nil) {
+				[NSThread sleepForTimeInterval:0.1];
+				if (self.canceled) {
+					NSLog(@"[EbookJapanDumper] User canceled the extraction process.");
+					self.canceled = NO; // 重置状态以便下次使用
+					return;
+				}
+			}
+		}
+
+		dispatch_async(dispatch_get_main_queue(), ^{
+			[ExtractionUIHandler sharedHandler].statusLabel.text = [NSString stringWithFormat:@"发现 %lu 个Ebix文件...", (unsigned long)ebixFiles.count];
+			[ExtractionUIHandler sharedHandler].progressView.progress = 0;
+			[ExtractionUIHandler sharedHandler].subProgressView.progress = 0;
+			[ExtractionUIHandler sharedHandler].subStatusLabel.text = @"等待抽取...";
+		});
+
+		for (int idx = 0; idx < ebixFiles.count; idx++) {
+			NSURL *fileURL = ebixFiles[idx];
+			NSString *filename = [fileURL lastPathComponent];
 
 			NSString *uuid = [self loadKeychainValueForKey:@"uuid" service:@"jp.co.yahoo.ebookjapan"];
 			NSString *uuidGenDate = [self loadKeychainValueForKey:@"generated_date" service:@"jp.co.yahoo.ebookjapan"];
@@ -125,55 +283,92 @@
 
 			EBIWrapperEbixFile *ebixFile = [[EBIWrapperEbixFile alloc] init];
 			NSLog(@"[EbookJapanDumper] Attempting to open file: %@ with envID: %@", filename, envID);
-			[ebixFile enableMultiThread];
-			[ebixFile setImageDataAsJpeg:YES];
 
 			if ([ebixFile openInstanceWithPath:[fileURL path] envID:envID]) {
+				[ebixFile enableMultiThread];
+				[ebixFile setImageDataAsJpeg:YES];
 				NSLog(@"[EbookJapanDumper] Successfully opened file: %@ with envID: %@", filename, envID);
 				EBIWrapperEbixBookInfo *bookInfo = [ebixFile getBookInfo];
 				NSLog(@"[EbookJapanDumper] Processing book: %@ by %@", bookInfo.bookName, bookInfo.writerName);
 				NSString *bookDirName = [NSString stringWithFormat:@"%@ - %@", bookInfo.bookName, bookInfo.writerName];
-				NSString *bookDirPath = [tempDir stringByAppendingPathComponent:bookDirName];
-				NSLog(@"[EbookJapanDumper] Created directory: %@", bookDirPath);
-				[[NSFileManager defaultManager] createDirectoryAtPath:bookDirPath withIntermediateDirectories:YES attributes:nil error:nil];
+				
+				NSString *zipPath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.cbz", bookDirName]];
+
+				SSZipArchive *archive = [[SSZipArchive alloc] initWithPath:zipPath];
+				BOOL isOpen = [archive open];
+
+				if (!isOpen) {
+					NSLog(@"[EbookJapanDumper] Failed to create zip archive at path: %@", zipPath);
+					return;
+				}
+
+				dispatch_async(dispatch_get_main_queue(), ^{
+					[ExtractionUIHandler sharedHandler].titleLabel.text = [NSString stringWithFormat:@"正在处理书籍 %d/%lu", idx + 1, (unsigned long)ebixFiles.count];
+					[ExtractionUIHandler sharedHandler].statusLabel.text = [NSString stringWithFormat:@"%@", bookInfo.bookName];
+				});
 
 				int imageCount = [ebixFile getImageCount];
-				@autoreleasepool {
-					for (int i = 0; i < imageCount; i++) {
+				for (int i = 0; i < imageCount; i++) {
+					@autoreleasepool {
+
+						dispatch_async(dispatch_get_main_queue(), ^{
+							[ExtractionUIHandler sharedHandler].subStatusLabel.text = [NSString stringWithFormat:@"正在处理图像 %d/%lu", i + 1, (unsigned long)imageCount];
+						});
+
 						NSDictionary *imageData = [ebixFile imageDataDictAtIndex:i];
-						NSLog(@"[EbookJapanDumper] Decrypting page %d/%d for book: %@", i + 1, imageCount, bookInfo.bookName);
+						NSString *fileName = nil;
+						NSData *dataToWrite = nil;
+
 						if (![imageData[@"error"] intValue]) {;
 							NSData *data = imageData[@"data"];
 
 							uint8_t *bytes = (uint8_t *)data.bytes;
 							if (bytes[0] == 0xFF && bytes[1] == 0xD8) {
 								// JPEG Passby
-								[data writeToFile:[bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d.jpg", i + 1]] atomically:YES];
+								fileName = [NSString stringWithFormat:@"%04d.jpg", i + 1];
+								dataToWrite = data;
 							} 
 							else if (bytes[0] == 0x42 && bytes[1] == 0x4D) {
-								// BMP Conversion -> PNG
+								// BMP Conversion
+								// Basic conversion using UIImage
 								UIImage *bmpImage = [UIImage imageWithData:data];
-								NSData *pngData = UIImagePNGRepresentation(bmpImage);
-								[pngData writeToFile:[bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d.png", i + 1]] atomically:YES];
+								dataToWrite = UIImagePNGRepresentation(bmpImage);
+
+								fileName = [NSString stringWithFormat:@"%04d.png", i + 1];
+							} else {
+								fileName = [NSString stringWithFormat:@"%04d.bin", i + 1];
+								dataToWrite = data;
+								NSLog(@"[EbookJapanDumper] Warning: Unrecognized image format for page %d, saving as .bin", i + 1);
 							}
+							NSLog(@"[EbookJapanDumper] Decrypted page %d/%d for book: %@", i + 1, imageCount, bookInfo.bookName);
 						} else {
 							NSLog(@"[EbookJapanDumper] 第 %d 页解密失败，跳过. ERROR: %@", i + 1, imageData[@"error"]);
-							NSString *errorPath = [bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d_error.txt", i + 1]];
-							[errorPath writeToFile:errorPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+							fileName = [NSString stringWithFormat:@"%04d_error.txt", i + 1];
+							dataToWrite = [[NSString stringWithFormat:@"Failed to decrypt page %d. Error code: %@", i + 1, imageData[@"error"]] dataUsingEncoding:NSUTF8StringEncoding];
 						}
+
+						if (dataToWrite && fileName) {
+							[archive writeData:dataToWrite filename:fileName withPassword:nil];
+						}
+
+						dispatch_async(dispatch_get_main_queue(), ^{
+							float imgProgress = (float)(i + 1) / imageCount;
+							[ExtractionUIHandler sharedHandler].progressView.progress = (float)(idx + imgProgress) / ebixFiles.count;
+							[ExtractionUIHandler sharedHandler].subProgressView.progress = (float)(i + 1) / imageCount;
+						});
 					}
 				}
 				[ebixFile closeInstance];
-				NSLog(@"[EbookJapanDumper] Please wait for compression: %@", bookInfo.bookName);
-				NSString *zipPath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.cbz", bookDirName]];
-				BOOL success = [SSZipArchive createZipFileAtPath:zipPath withContentsOfDirectory:bookDirPath];
+				BOOL success = [archive close];
 
 				if (success) {
-					[[NSFileManager defaultManager] removeItemAtPath:bookDirPath error:nil]; // 删除临时文件夹
 					NSLog(@"[EbookJapanDumper] 成功导出: %@", zipPath);
 				} else {
 					NSLog(@"[EbookJapanDumper] 导出失败: %@", zipPath);
 				}
+				dispatch_async(dispatch_get_main_queue(), ^{
+					[ExtractionUIHandler sharedHandler].progressView.progress = (float)(idx + 1) / ebixFiles.count;
+				});
 			} else {
 				NSLog(@"[EbookJapanDumper] 无法打开文件: %@, envID: %@", filename, envID);
 				[[NSString stringWithFormat:@"Failed to open file: %@ with %@", filename, envID] writeToFile:[tempDir stringByAppendingPathComponent:@"error_log.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -182,7 +377,9 @@
         
         // 3. 完成后切回主线程，触发文件选择器
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self presentFolderPickerWithTempDir:tempDir];
+			[[ExtractionUIHandler sharedHandler].overlayView removeFromSuperview];
+			// [self showSuccessAlertWithCount:ebixFiles.count];
+			[self presentFolderPickerWithTempDir:tempDir];
         });
     });
 }
@@ -191,16 +388,13 @@
     self.currentTempDir = tempDir; // 记录下来供回调使用
     
     // 开启文件夹选择模式
-    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[[NSURL fileURLWithPath:tempDir]] asCopy:NO];
+	
     picker.delegate = self;
 	picker.allowsMultipleSelection = NO;
     
     // 获取当前最顶层的 ViewController 来弹出
-	#pragma clang diagnostic push
-	#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-	#pragma clang diagnostic pop
-    [rootVC presentViewController:picker animated:YES completion:nil];
+    [[ExportManager getRootViewController] presentViewController:picker animated:YES completion:nil];
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {

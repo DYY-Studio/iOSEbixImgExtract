@@ -74,157 +74,6 @@
 }
 @end
 
-
-// 假设这是我们的数据模型
-@interface ExportBookItem : NSObject
-@property (nonatomic, copy) NSString *bookTitle;
-@property (nonatomic, strong) id rawBookObject; // 存放 App 原生的书籍对象
-@property (nonatomic, assign) BOOL isSelected;
-@end
-
-@implementation ExportBookItem
-@end
-
-@interface ExportViewController : UIViewController <UITableViewDelegate, UITableViewDataSource>
-
-@property (nonatomic, strong) NSMutableArray<ExportBookItem *> *dataSource;
-@property (nonatomic, strong) UITableView *tableView;
-@property (nonatomic, strong) UIButton *exportButton;
-
-@end
-
-@implementation ExportViewController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor systemBackgroundColor];
-    self.title = @"选择导出书籍";
-    
-    // 1. 导航栏按钮：全选/取消全选、关闭
-    UIBarButtonItem *selectAllBtn = [[UIBarButtonItem alloc] initWithTitle:@"全选" style:UIBarButtonItemStylePlain target:self action:@selector(toggleSelectAll:)];
-    self.navigationItem.leftBarButtonItem = selectAllBtn;
-    
-    UIBarButtonItem *closeBtn = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(dismissSelf)];
-    self.navigationItem.rightBarButtonItem = closeBtn;
-    
-    // 2. 初始化 TableView
-    self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
-    self.tableView.delegate = self;
-    self.tableView.dataSource = self;
-    self.tableView.tableFooterView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.frame.size.width, 100)]; // 为底部按钮留白
-    [self.view addSubview:self.tableView];
-    
-    // 3. 悬浮在底部的导出按钮
-    [self setupExportButton];
-}
-
-- (void)setupExportButton {
-    CGFloat btnHeight = 50;
-    CGFloat bottomPadding = 30;
-    self.exportButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.exportButton.frame = CGRectMake(20, self.view.frame.size.height - btnHeight - bottomPadding, self.view.frame.size.width - 40, btnHeight);
-    self.exportButton.backgroundColor = [UIColor systemBlueColor];
-    [self.exportButton setTitle:@"开始批量导出" forState:UIControlStateNormal];
-    [self.exportButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.exportButton.layer.cornerRadius = 10;
-    self.exportButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    [self.exportButton addTarget:self action:@selector(startBatchExport) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.exportButton];
-}
-
-#pragma mark - UITableViewDataSource
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.dataSource.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *cellID = @"BookCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellID];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:cellID];
-    }
-    
-    ExportBookItem *item = self.dataSource[indexPath.row];
-    cell.textLabel.text = item.bookTitle;
-    cell.detailTextLabel.text = @"专有格式文件";
-    
-    // 根据模型状态显示打勾
-    cell.accessoryType = item.isSelected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-    
-    return cell;
-}
-
-#pragma mark - UITableViewDelegate
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    // 1. 取消反选高亮动画
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    
-    // 2. 修改数据模型
-    ExportBookItem *item = self.dataSource[indexPath.row];
-    item.isSelected = !item.isSelected;
-    
-    // 3. 局部刷新 Cell 状态
-    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
-    cell.accessoryType = item.isSelected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-    
-    [self updateTitleWithCount];
-}
-
-#pragma mark - Actions
-
-- (void)toggleSelectAll:(UIBarButtonItem *)sender {
-    static BOOL isAll = NO;
-    isAll = !isAll;
-    
-    for (ExportBookItem *item in self.dataSource) {
-        item.isSelected = isAll;
-    }
-    
-    sender.title = isAll ? @"取消全选" : @"全选";
-    [self.tableView reloadData];
-    [self updateTitleWithCount];
-}
-
-- (void)updateTitleWithCount {
-    NSArray *selected = [self.dataSource filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"isSelected == YES"]];
-    self.title = selected.count > 0 ? [NSString stringWithFormat:@"已选 %lu 本", (unsigned long)selected.count] : @"选择导出书籍";
-}
-
-- (void)dismissSelf {
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-
-- (void)startBatchExport {
-    NSArray *selectedItems = [self.dataSource filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"isSelected == YES"]];
-    if (selectedItems.count == 0) return;
-    
-    // 禁用按钮防止重复点击
-    self.exportButton.enabled = NO;
-    self.exportButton.alpha = 0.5;
-    
-    // 开启后台导出逻辑
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        for (ExportBookItem *item in selectedItems) {
-            // 这里调用你 Hook 到的导出方法
-            // [YourHookHelper dumpBook:item.rawBookObject];
-            [NSThread sleepForTimeInterval:0.5]; // 模拟耗时
-        }
-        
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.exportButton.enabled = YES;
-            self.exportButton.alpha = 1.0;
-            // 弹出完成提示
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"导出完成" message:@"书籍已保存至 App 沙盒 Documents/Export 目录" preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:alert animated:YES completion:nil];
-        });
-    });
-}
-
-@end
-
 static UIWindow *floatingWindow;
 static ExportFloatingBall *ball;
 typedef void (*MSHookMessageEx_t)(Class _class, SEL message, IMP hook, IMP *old);
@@ -269,7 +118,7 @@ static UIWindow_makeKeyAndVisible_t UIWindow_makeKeyAndVisible_p = NULL;
                                                              options:NSDirectoryEnumerationSkipsHiddenFiles
                                                         errorHandler:nil];
     
-	NSMutableArray *foundBooks = [NSMutableArray array];
+	NSMutableArray<NSURL *> *foundBooks = [NSMutableArray array];
 	NSString *uuid = [NSString initWithData:[loadKeychainValueForKey:@"uuid" service:@"jp.co.yahoo.ebookjapan"] encoding:NSUTF8StringEncoding];
 	NSString *generated_date = [NSString initWithData:[loadKeychainValueForKey:@"generated_date" service:@"jp.co.yahoo.ebookjapan"] encoding:NSUTF8StringEncoding];
 
@@ -282,10 +131,11 @@ static UIWindow_makeKeyAndVisible_t UIWindow_makeKeyAndVisible_p = NULL;
         
         if ([fileURL.pathExtension.lowercaseString isEqualToString:@"ebix"]) {
 			EBIWrapperEbixFile *ebixFile = [[EBIWrapperEbixFile alloc] init];
-			[ebixFile initInstanceWithPath:fileURL envID:envId];
-			EBIWrapperEbixBookInfo *bookInfo = [ebixFile getBookInfo];
-            foundBooks.addObject(bookInfo);
-			[ebixFile closeInstance];
+			if ([ebixFile initInstanceWithPath:fileURL envID:envId]) {
+				EBIWrapperEbixBookInfo *bookInfo = [ebixFile getBookInfo];
+				foundBooks.addObject(fileURL);
+				[ebixFile closeInstance];
+			}
         }
     }
 	return foundBooks;

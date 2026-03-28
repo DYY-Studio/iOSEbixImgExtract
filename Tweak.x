@@ -33,53 +33,20 @@
 @end
 
 @interface EBIWrapperEbixFile : NSObject
-- (instancetype)openInstanceWithPath:(NSString *)path envID:(NSString *)envID;
+- (bool)openInstanceWithPath:(NSString *)path envID:(NSString *)envID;
 - (NSDictionary *)imageDataDictAtIndex:(int)index;
 - (NSData *)imageDataAtIndex:(int)index;
 - (int)getImageCount;
 - (int)getMaxPage;
 - (EBIWrapperEbixBookInfo *)getBookInfo;
 - (void)closeInstance;
-@end
-
-@interface ExportFloatingBall : UIButton
-@property (nonatomic, copy) void (^onTapBlock)(void);
-@end
-
-@implementation ExportFloatingBall {
-    CGPoint _startPoint;
-}
-
-- (instancetype)initWithFrame:(CGRect)frame {
-    if (self = [super initWithFrame:frame]) {
-        self.backgroundColor = [UIColor systemBlueColor];
-        self.layer.cornerRadius = frame.size.width / 2;
-        [self setTitle:@"导出" forState:UIControlStateNormal];
-        self.titleLabel.font = [UIFont systemFontOfSize:12];
-        
-        // 添加拖动手势
-        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
-        [self addGestureRecognizer:pan];
-        [self addTarget:self action:@selector(clicked) forControlEvents:UIControlEventTouchUpInside];
-    }
-    return self;
-}
-
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    CGPoint point = [pan translationInView:self.superview];
-    self.center = CGPointMake(self.center.x + point.x, self.center.y + point.y);
-    [pan setTranslation:CGPointZero inView:self.superview];
-}
-
-- (void)clicked {
-    if (self.onTapBlock) self.onTapBlock();
-}
+- (void)enableMultiThread;
+- (void)setImageDataAsJpeg:(bool)asJpeg;
 @end
 
 @interface ExportManager : 	NSObject <UIDocumentPickerDelegate>
 @property (nonatomic, strong) NSString *currentTempDir;
 @property (nonatomic, strong) UIWindow *floatingWindow;
-@property (nonatomic, strong) ExportFloatingBall *ball;
 + (instancetype)shared;
 - (void)startAutomatedDump;
 - (NSString *)loadKeychainValueForKey:(NSString *)key service:(NSString *)service;
@@ -94,20 +61,6 @@
 		instance = [[ExportManager alloc] init];
 	});
 	return instance;
-}
-
-- (void)setupUI {
-	self.floatingWindow = [[UIWindow alloc] initWithFrame:CGRectMake(20, 100, 50, 50)];
-	self.floatingWindow.windowLevel = UIWindowLevelAlert + 2;
-	self.floatingWindow.backgroundColor = [UIColor clearColor];
-	self.floatingWindow.hidden = NO;
-	
-	self.ball = [[ExportFloatingBall alloc] initWithFrame:self.floatingWindow.bounds];
-	self.ball.onTapBlock = ^{
-		[[ExportManager shared] startAutomatedDump];
-	};
-	
-	[self.floatingWindow addSubview:self.ball];
 }
 
 - (NSString *)loadKeychainValueForKey:(NSString *)key service:(NSString *)service {
@@ -141,72 +94,97 @@
 - (void)startAutomatedDump {
     NSString *tempDir = [[NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingPathComponent:@"DumpedBooks"];
     // [[NSFileManager defaultManager] removeItemAtPath:tempDir error:nil]; // 清空旧数据
+	NSLog(@"[EbookJapanDumper] Created temporary directory for dumping: %@", tempDir);
     [[NSFileManager defaultManager] createDirectoryAtPath:tempDir withIntermediateDirectories:YES attributes:nil error:nil];
+	NSLog(@"[EbookJapanDumper] Starting scan of app data directory...");
     
     // 2. 扫描 App 数据目录 (假设书籍在 Documents)
     NSString *docsPath = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES) firstObject];
     NSFileManager *fileManager = [NSFileManager defaultManager];
     
+	NSLog(@"[EbookJapanDumper] Scanning directory: %@", docsPath);
     // 获取 URL 数组，跳过隐藏文件
     NSDirectoryEnumerator *enumerator = [fileManager enumeratorAtURL:[NSURL fileURLWithPath:docsPath]
                                           includingPropertiesForKeys:@[NSURLNameKey, NSURLIsRegularFileKey]
                                                              options:NSDirectoryEnumerationSkipsHiddenFiles
                                                         errorHandler:nil];
     
-    // dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        for (NSURL *fileURL in enumerator) {
-            NSString *filename = [fileURL lastPathComponent];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+		for (NSURL *fileURL in enumerator) {
+			NSString *filename = [fileURL lastPathComponent];
 			if (![filename.pathExtension.lowercaseString isEqualToString:@"ebix"]) continue;
 
 			NSString *uuid = [self loadKeychainValueForKey:@"uuid" service:@"jp.co.yahoo.ebookjapan"];
 			NSString *uuidGenDate = [self loadKeychainValueForKey:@"generated_date" service:@"jp.co.yahoo.ebookjapan"];
+			NSLog(@"[EbookJapanDumper] Loaded UUID: %@, Generated Date: %@", uuid, uuidGenDate);
 
 			EBIWrapperEnvID *envIDGenerator = [[EBIWrapperEnvID alloc] init];
 			NSArray *parts = [envIDGenerator createNewBuildIdentifier:uuid uuidGenDate:uuidGenDate];
 			NSString *envID = [parts firstObject];
+			NSLog(@"[EbookJapanDumper] Generated envID: %@", envID);
 
-            EBIWrapperEbixFile *ebixFile = [[EBIWrapperEbixFile alloc] init];
+			EBIWrapperEbixFile *ebixFile = [[EBIWrapperEbixFile alloc] init];
+			NSLog(@"[EbookJapanDumper] Attempting to open file: %@ with envID: %@", filename, envID);
+			[ebixFile enableMultiThread];
+			[ebixFile setImageDataAsJpeg:YES];
+
 			if ([ebixFile openInstanceWithPath:[fileURL path] envID:envID]) {
-				// EBIWrapperEbixBookInfo *bookInfo = [ebixFile getBookInfo];
-				// NSLog(@"[EbookJapanDumper] Processing book: %@ by %@", bookInfo.bookName, bookInfo.writerName);
-				// NSString *bookDirName = [NSString stringWithFormat:@"%@ - %@", bookInfo.bookName, bookInfo.writerName];
-				// NSString *bookDirPath = [tempDir stringByAppendingPathComponent:bookDirName];
-				// NSLog(@"[EbookJapanDumper] Created directory: %@", bookDirPath);
-				// [[NSFileManager defaultManager] createDirectoryAtPath:bookDirPath withIntermediateDirectories:YES attributes:nil error:nil];
+				NSLog(@"[EbookJapanDumper] Successfully opened file: %@ with envID: %@", filename, envID);
+				EBIWrapperEbixBookInfo *bookInfo = [ebixFile getBookInfo];
+				NSLog(@"[EbookJapanDumper] Processing book: %@ by %@", bookInfo.bookName, bookInfo.writerName);
+				NSString *bookDirName = [NSString stringWithFormat:@"%@ - %@", bookInfo.bookName, bookInfo.writerName];
+				NSString *bookDirPath = [tempDir stringByAppendingPathComponent:bookDirName];
+				NSLog(@"[EbookJapanDumper] Created directory: %@", bookDirPath);
+				[[NSFileManager defaultManager] createDirectoryAtPath:bookDirPath withIntermediateDirectories:YES attributes:nil error:nil];
 
-				// int imageCount = [ebixFile getImageCount];
-				// for (int i = 0; i < imageCount; i++) {
-				// 	NSDictionary *imageData = [ebixFile imageDataDictAtIndex:i];
-				// 	NSLog(@"[EbookJapanDumper] Decrypting page %d/%d for book: %@", i + 1, imageCount, bookInfo.bookName);
-				// 	if (!imageData[@"error"]) {
-				// 		NSLog(@"[EbookJapanDumper] Successfully decrypted page %d for book: %@", i + 1, bookInfo.bookName);
-				// 		NSString *imagePath = [bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d.jpg", i + 1]];
-				// 		[imageData[@"data"] writeToFile:imagePath atomically:YES];
-				// 	} else {
-				// 		NSLog(@"[EbookJapanDumper] 第 %d 页解密失败，跳过", i + 1);
-				// 		NSString *errorPath = [bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d_error.txt", i + 1]];
-				// 		[errorPath writeToFile:errorPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
-				// 	}
-				// }
+				int imageCount = [ebixFile getImageCount];
+				@autoreleasepool {
+					for (int i = 0; i < imageCount; i++) {
+						NSDictionary *imageData = [ebixFile imageDataDictAtIndex:i];
+						NSLog(@"[EbookJapanDumper] Decrypting page %d/%d for book: %@", i + 1, imageCount, bookInfo.bookName);
+						if (![imageData[@"error"] intValue]) {;
+							NSData *data = imageData[@"data"];
+
+							uint8_t *bytes = (uint8_t *)data.bytes;
+							if (bytes[0] == 0xFF && bytes[1] == 0xD8) {
+								// JPEG Passby
+								[data writeToFile:[bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d.jpg", i + 1]] atomically:YES];
+							} 
+							else if (bytes[0] == 0x42 && bytes[1] == 0x4D) {
+								// BMP Conversion -> PNG
+								UIImage *bmpImage = [UIImage imageWithData:data];
+								NSData *pngData = UIImagePNGRepresentation(bmpImage);
+								[pngData writeToFile:[bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d.png", i + 1]] atomically:YES];
+							}
+						} else {
+							NSLog(@"[EbookJapanDumper] 第 %d 页解密失败，跳过. ERROR: %@", i + 1, imageData[@"error"]);
+							NSString *errorPath = [bookDirPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%04d_error.txt", i + 1]];
+							[errorPath writeToFile:errorPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+						}
+					}
+				}
 				[ebixFile closeInstance];
-				// NSString *zipPath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.zip", bookDirName]];
-				// BOOL success = [SSZipArchive createZipFileAtPath:zipPath withContentsOfDirectory:bookDirPath];
+				NSLog(@"[EbookJapanDumper] Please wait for compression: %@", bookInfo.bookName);
+				NSString *zipPath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.cbz", bookDirName]];
+				BOOL success = [SSZipArchive createZipFileAtPath:zipPath withContentsOfDirectory:bookDirPath];
 
-				// if (success) {
-				// 	[[NSFileManager defaultManager] removeItemAtPath:bookDirPath error:nil]; // 删除临时文件夹
-				// 	NSLog(@"[EbookJapanDumper] 成功导出: %@", zipPath);
-				// }
+				if (success) {
+					[[NSFileManager defaultManager] removeItemAtPath:bookDirPath error:nil]; // 删除临时文件夹
+					NSLog(@"[EbookJapanDumper] 成功导出: %@", zipPath);
+				} else {
+					NSLog(@"[EbookJapanDumper] 导出失败: %@", zipPath);
+				}
 			} else {
 				NSLog(@"[EbookJapanDumper] 无法打开文件: %@, envID: %@", filename, envID);
 				[[NSString stringWithFormat:@"Failed to open file: %@ with %@", filename, envID] writeToFile:[tempDir stringByAppendingPathComponent:@"error_log.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
 			}
-        }
+		}
         
         // 3. 完成后切回主线程，触发文件选择器
-    //     dispatch_async(dispatch_get_main_queue(), ^{
-    //         [self presentFolderPickerWithTempDir:tempDir];
-    //     });
-    // });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self presentFolderPickerWithTempDir:tempDir];
+        });
+    });
 }
 
 - (void)presentFolderPickerWithTempDir:(NSString *)tempDir {
@@ -227,11 +205,13 @@
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *targetFolderURL = urls.firstObject;
+	NSLog(@"[EbookJapanDumper] User selected folder: %@", targetFolderURL.path);
     
     // 1. 开启安全访问权限
     if ([targetFolderURL startAccessingSecurityScopedResource]) {
         NSFileManager *fm = [NSFileManager defaultManager];
         NSArray *dumpedFiles = [fm contentsOfDirectoryAtPath:self.currentTempDir error:nil];
+        NSLog(@"[EbookJapanDumper] Found %lu dumped files in: %@", (unsigned long)dumpedFiles.count, self.currentTempDir);
         
         for (NSString *fileName in dumpedFiles) {
             NSString *srcPath = [self.currentTempDir stringByAppendingPathComponent:fileName];
@@ -243,6 +223,11 @@
                 [fm removeItemAtURL:destURL error:nil]; // 如果已存在则覆盖
             }
             [fm copyItemAtPath:srcPath toPath:destURL.path error:&error];
+			if (error) {
+				NSLog(@"[EbookJapanDumper] Failed to copy %@ to %@. Error: %@", srcPath, destURL.path, error);
+			} else {
+				NSLog(@"[EbookJapanDumper] Successfully copied %@ to %@", srcPath, destURL.path);
+			}
         }
         
         // 3. 停止访问
@@ -270,37 +255,11 @@ static void makeKeyAndVisible(id self, SEL _cmd) {
     dispatch_once(&onceToken, ^{
 		NSLog(@"[EbookJapanDumper] UIWindow makeKeyAndVisible called, setting up floating button...");
 		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-			[[ExportManager shared] setupUI];
+			[[ExportManager shared] startAutomatedDump];
 		});
 	});
 }
 
-
-#ifdef DEBUG_EBI
-typedef bool (*EBIWrapperEbixFile_openInstanceWithPath_envID_p)(id self, SEL _cmd, NSString *path, NSString *envID);
-static EBIWrapperEbixFile_openInstanceWithPath_envID_p EBIWrapperEbixFile_openInstanceWithPath_envID_o = NULL;
-static bool EBIWrapperEbixFile_openInstanceWithPath_envID_hook(id self, SEL _cmd, NSString *path, NSString *envID) {
-	bool result = EBIWrapperEbixFile_openInstanceWithPath_envID_o(self, _cmd, path, envID);
-	NSLog(@"[EbookJapanDumper] Attempting to open file: %@ with envID: %@ => %@", path, envID, result ? @"Success" : @"Failure");
-
-	ExportManager *manager = [ExportManager shared];
-	NSString *uuid = [manager loadKeychainValueForKey:@"uuid" service:@"jp.co.yahoo.ebookjapan"];
-	NSString *uuidGenDate = [manager loadKeychainValueForKey:@"generated_date" service:@"jp.co.yahoo.ebookjapan"];
-	NSArray *parts = [[[EBIWrapperEnvID alloc] init] createNewBuildIdentifier:uuid uuidGenDate:uuidGenDate];
-	NSString *customEnvID = [parts firstObject];
-	if ([envID isEqualToString:customEnvID]) {
-		NSLog(@"[EbookJapanDumper] Custom envID matches generated envID");
-	} else {
-		NSLog(@"[EbookJapanDumper] Custom envID does NOT match generated envID. Generated: %@", customEnvID);
-	}
-	if (EBIWrapperEbixFile_openInstanceWithPath_envID_o(self, _cmd, path, customEnvID)) {
-		NSLog(@"[EbookJapanDumper] Successfully opened file with custom envID");
-	} else {
-		NSLog(@"[EbookJapanDumper] Failed to open file with custom envID");
-	}
-	return result;
-}
-#endif
 
 // id __cdecl -[EBIWrapperEnvID makeSeedDataBlock](EBIWrapperEnvID *self, SEL)
 typedef NSString* (*EBIWrapperEnvID_makeSeedDataBlock_p)(id self, SEL _cmd);
@@ -319,15 +278,6 @@ static void tweakConstructor() {
     if (!MSHookMessageEx_p) {
         return;
     }
-
-	#ifdef DEBUG_EBI
-	MSHookMessageEx_p(
-		NSClassFromString(@"EBIWrapperEbixFile"), 
-		@selector(openInstanceWithPath:envID:), 
-		(IMP)EBIWrapperEbixFile_openInstanceWithPath_envID_hook, 
-		(IMP *)&EBIWrapperEbixFile_openInstanceWithPath_envID_o
-	);
-	#endif
 
 	MSHookMessageEx_p(
 		NSClassFromString(@"EBIWrapperEnvID"), 

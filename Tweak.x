@@ -28,6 +28,22 @@
 @property (nonatomic, strong) NSNumber *volumeIndex;
 @end
 
+@interface EBIWrapperEbixFileInfo : NSObject
+@property (nonatomic, assign) bool spineBlockValied;
+@property (nonatomic, assign) bool thumbnailBlockValid;
+@property (nonatomic, assign) bool coverBlockValid;
+@property (nonatomic, assign) bool linkJumpBlockValid;
+@property (nonatomic, assign) bool copyrightBlockValid;
+@property (nonatomic, assign) bool addendumBlockValid;
+@property (nonatomic, assign) bool navigationDocumentValid;
+@property (nonatomic, assign) bool bodyBlockCryptValid;
+@property (nonatomic, assign) int bodyBlockOffset;
+@property (nonatomic, assign) int bodyBlockSize;
+@property (nonatomic, assign) int addendumImageCount;
+@property (nonatomic, assign) int pageCount;
+@property (nonatomic, strong) NSString *bodyFormat;
+@property (nonatomic, strong) NSString *bodyFormatVersion;
+@end
 
 @interface ExportManager : 	NSObject <UIDocumentPickerDelegate>
 @property (nonatomic, strong) NSString *currentTempDir;
@@ -54,6 +70,7 @@
 - (int)getImageCount;
 - (int)getMaxPage;
 - (EBIWrapperEbixBookInfo *)getBookInfo;
+- (EBIWrapperEbixFileInfo *)getFileInfo;
 - (void)closeInstance;
 - (void)enableMultiThread;
 - (void)setImageDataAsJpeg:(bool)asJpeg;
@@ -287,6 +304,13 @@
 			if ([ebixFile openInstanceWithPath:[fileURL path] envID:envID]) {
 				[ebixFile enableMultiThread];
 				[ebixFile setImageDataAsJpeg:YES];
+
+				EBIWrapperEbixFileInfo *fileInfo = [ebixFile getFileInfo];
+				if (![fileInfo.bodyFormat isEqualToString:@"ebi"] || ![fileInfo.bodyFormatVersion hasPrefix:@"HVQBOOK"]) {
+					[ebixFile closeInstance];
+					NSLog(@"[EbookJapanDumper] Currently unsupported format: %@, %@", fileInfo.bodyFormat, fileInfo.bodyFormatVersion);
+					continue;
+				}
 				NSLog(@"[EbookJapanDumper] Successfully opened file: %@ with envID: %@", filename, envID);
 				EBIWrapperEbixBookInfo *bookInfo = [ebixFile getBookInfo];
 				NSLog(@"[EbookJapanDumper] Processing book: %@ by %@", bookInfo.bookName, bookInfo.writerName);

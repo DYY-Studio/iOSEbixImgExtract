@@ -17,6 +17,9 @@
   * 即同时注入 Substitute, ElleKit 或其现代化替代
   * LiveContainer环境自带ElleKit
 
+## 支持格式
+* EBIX (BodyFormat: EBI, BodyFormatVersion: HVQBOOK)
+
 ## 使用
 每次打开应用时，会扫描Library路径检查是否有Ebix文件存在，如果有则弹窗询问用户是否抽取
 

@@ -97,6 +97,11 @@
 }
 #pragma clang diagnostic pop
 
++ (NSString *)replaceIllegalCharacters:(NSString *)string {
+    string = [string stringByReplacingOccurrencesOfString:@"/" withString:kUnicodeDivisionSlash];
+	return [string stringByReplacingOccurrencesOfString:@":" withString:kUnicodeCompactColon];
+}
+
 - (void)showExtractionAlert {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"EbixDumper" 
                                                                    message:@"检测到Ebix文件，是否开始抽取？" 
@@ -228,7 +233,7 @@
 				NSLog(@"[EbookJapanDumper] Successfully opened file: %@ with envID: %@", filename, envID);
 				EBIWrapperEbixBookInfo *bookInfo = [ebixFile getBookInfo];
 				NSLog(@"[EbookJapanDumper] Processing book: %@ by %@", bookInfo.bookName, bookInfo.writerName);
-				NSString *bookDirName = [NSString stringWithFormat:@"%@ - %@", bookInfo.bookName, bookInfo.writerName];
+				NSString *bookDirName = [ExportManager replaceIllegalCharacters:[NSString stringWithFormat:@"%@ - %@", bookInfo.bookName, bookInfo.writerName]];
 				
 				NSString *zipPath = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.cbz", bookDirName]];
 
@@ -237,7 +242,7 @@
 
 				if (!isOpen) {
 					NSLog(@"[EbookJapanDumper] Failed to create zip archive at path: %@", zipPath);
-					return;
+					continue;
 				}
 
 				dispatch_async(dispatch_get_main_queue(), ^{

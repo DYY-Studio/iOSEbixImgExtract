@@ -1,3 +1,6 @@
+#define kUnicodeCompactColon @"\u2236"
+#define kUnicodeDivisionSlash @"\u2215"
+
 @interface EBIWrapperEbixBookInfo : NSObject
 @property (nonatomic, strong) NSString *bookName;
 @property (nonatomic, strong) NSString *bookNameKana;
